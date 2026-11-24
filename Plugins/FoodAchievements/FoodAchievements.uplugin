@@ -1,0 +1,10 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "1.0",
+  "FriendlyName": "Food Achievements",
+  "Description": "Persistent kitchen achievements and medal UI for Food.",
+  "Category": "Gameplay",
+  "CanContainContent": false,
+  "Modules": [{ "Name": "FoodAchievements", "Type": "Runtime", "LoadingPhase": "Default" }]
+}
