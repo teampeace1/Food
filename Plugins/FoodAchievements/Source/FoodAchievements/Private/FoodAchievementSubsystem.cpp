@@ -11,6 +11,10 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/TextBlock.h"
 #include "Components/Border.h"
+#include "Components/Image.h"
+#include "Components/ScrollBox.h"
+#include "Components/VerticalBox.h"
+#include "Components/VerticalBoxSlot.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/Texture2D.h"
 #include "EngineUtils.h"
@@ -163,7 +167,7 @@ void UFoodAchievementSubsystem::Deinitialize()
     FoodStoryBook::Shutdown(GetWorld());
     FoodFinale::Shutdown(GetWorld());
     if (bRecipeMovementLocked && GetWorld() && GetWorld()->GetFirstPlayerController()) GetWorld()->GetFirstPlayerController()->SetIgnoreMoveInput(false);
-    if (MemoryToast.IsValid() && GetWorld() && GetWorld()->GetGameViewport()) GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(MemoryToast.ToSharedRef());
+    if (MemoryToast.IsValid()) MemoryToast->RemoveFromParent();
     MemoryToast.Reset();
     RemovePopup();
     RemoveJournal();
@@ -238,7 +242,7 @@ void UFoodAchievementSubsystem::Tick(float DeltaTime)
         }
     }
 
-    if (PopupBorder.IsValid())
+    if (PopupWidget.IsValid())
     {
         const double Elapsed = FPlatformTime::Seconds() - PopupStartTime;
         if (Elapsed >= 5.0)
@@ -249,7 +253,7 @@ void UFoodAchievementSubsystem::Tick(float DeltaTime)
         else
         {
             const float Alpha = FMath::Clamp(static_cast<float>(FMath::Min(Elapsed, 5.0 - Elapsed) / 0.35), 0.0f, 1.0f);
-            PopupBorder->SetRenderOpacity(Alpha);
+            if (PopupBorder.IsValid()) PopupBorder->SetRenderOpacity(Alpha);
             // A quick full turn settles into a gentle shine while the toast is visible.
             if (PopupMedal.IsValid())
             {
@@ -257,7 +261,10 @@ void UFoodAchievementSubsystem::Tick(float DeltaTime)
                 const float Ease = 1.0f - FMath::Pow(1.0f - Intro, 3.0f);
                 const float Angle = 2.0f * PI * Ease;
                 const float Scale = 0.55f + 0.45f * Ease + 0.08f * FMath::Sin(Intro * PI);
-                PopupMedal->SetRenderTransform(FSlateRenderTransform(Concatenate(FScale2D(Scale), FQuat2D(Angle))));
+                FWidgetTransform MedalTransform;
+                MedalTransform.Scale = FVector2D(Scale, Scale);
+                MedalTransform.Angle = FMath::RadiansToDegrees(Angle);
+                PopupMedal->SetRenderTransform(MedalTransform);
                 PopupMedal->SetColorAndOpacity(FLinearColor(1.0f, 0.93f + 0.07f * FMath::Sin(static_cast<float>(Elapsed) * 12.0f), 0.75f + 0.25f * FMath::Sin(static_cast<float>(Elapsed) * 12.0f), 1.0f));
             }
             if (PopupSparkle.IsValid())
@@ -284,20 +291,28 @@ void UFoodAchievementSubsystem::UpdateMemoryNotifications()
         if (Ready[Index] && !bMemoryNotified[Index]) { bMemoryNotified[Index] = true; MemoryToastQueue.Add(Index); }
     if (MemoryToast.IsValid() && FPlatformTime::Seconds() - MemoryToastStart >= 5.0)
     {
-        World->GetGameViewport()->RemoveViewportWidgetContent(MemoryToast.ToSharedRef());
+        MemoryToast->RemoveFromParent();
         MemoryToast.Reset();
     }
     if (!MemoryToast.IsValid() && !MemoryToastQueue.IsEmpty())
     {
         const int32 Index = MemoryToastQueue[0];
         MemoryToastQueue.RemoveAt(0);
-        MemoryToast = SNew(SOverlay).Visibility(EVisibility::HitTestInvisible)
-          + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Bottom).Padding(0,0,0,70)
-          [SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush"))).BorderBackgroundColor(FLinearColor(0.16f,0.09f,0.04f,0.0f)).Padding(FMargin(22,10))
-           [SNew(SVerticalBox)
-            + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)[SNew(STextBlock).Text(FText::FromString(TEXT("手记更新"))).Font(Font(15,true)).ColorAndOpacity(FLinearColor(1.0f,0.80f,0.46f))]
-            + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0,4,0,0)[SNew(STextBlock).Text(FText::FromString(Lines[Index])).Font(Font(18)).ColorAndOpacity(FLinearColor(1.0f,0.94f,0.82f))]]];
-        World->GetGameViewport()->AddViewportWidgetContent(MemoryToast.ToSharedRef(), 750);
+        UClass* ToastClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/UI/Widgets/HUD/WBP_MemoryToast.WBP_MemoryToast_C"));
+        UUserWidget* Toast = ToastClass ? CreateWidget<UUserWidget>(World, ToastClass) : nullptr;
+        if (!Toast)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Missing widget blueprint: /Game/UI/Widgets/HUD/WBP_MemoryToast"));
+            return;
+        }
+        // 位置、背景、字号都在 WBP_MemoryToast 里调，代码只负责填这一句回忆
+        if (Toast->WidgetTree)
+        {
+            if (UTextBlock* Body = Cast<UTextBlock>(Toast->WidgetTree->FindWidget(TEXT("Body"))))
+                Body->SetText(FText::FromString(Lines[Index]));
+        }
+        Toast->AddToViewport(750);
+        MemoryToast = Toast;
         MemoryToastStart = FPlatformTime::Seconds();
     }
 }
@@ -371,7 +386,7 @@ void UFoodAchievementSubsystem::ResetProgress()
 
 bool UFoodAchievementSubsystem::IsPopupShowing() const
 {
-    return PopupBorder.IsValid();
+    return PopupWidget.IsValid();
 }
 
 void UFoodAchievementSubsystem::SetJournalOpen(bool bOpen)
@@ -458,7 +473,7 @@ void UFoodAchievementSubsystem::Unlock(FName Id)
     PopupQueue.Add(Index);
     // Mount the toast in the gameplay viewport at the moment of completion. The recipe/journal
     // overlay is unrelated and never has to be opened for a medal to appear.
-    if (!PopupBorder.IsValid()) ShowNextPopup();
+    if (!PopupWidget.IsValid()) ShowNextPopup();
     if (bRecipeVisible && bJournalOpen) RebuildJournal();
     UE_LOG(LogTemp, Display, TEXT("Food achievement unlocked: %s"), Medals[Index].Name);
 }
@@ -615,7 +630,6 @@ void UFoodAchievementSubsystem::RebuildJournal()
     RemoveJournal();
     UWorld* World = GetWorld();
     if (!World || !World->GetGameViewport() || !bRecipeVisible) return;
-    TSharedRef<SVerticalBox> Content = SNew(SVerticalBox);
 
     // Tab only opens the overlay once; these arrows flip between the recipe sheet and the journal
     // without closing it, so a player does not have to leave the menu to look at the medals.
@@ -650,72 +664,77 @@ void UFoodAchievementSubsystem::RebuildJournal()
          + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8, 0, 2, 0)
          [SNew(STextBlock).Text(FText::FromString(TEXT("左右键切换"))).Font(Font(11)).ColorAndOpacity(FLinearColor(0.82f, 0.74f, 0.60f))]];
 
+    // The strip stays in Slate because it carries the click handlers; the panel itself is a widget
+    // blueprint so the memory text and the card styling live in the designer.
+    JournalTabStrip = SNew(SOverlay)
+        + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Top).Padding(FMargin(0, 9, 0, 0))
+        [TabRow];
+    World->GetGameViewport()->AddViewportWidgetContent(JournalTabStrip.ToSharedRef(), 701);
+
     if (bJournalOpen)
     {
-        TSharedRef<SScrollBox> List = SNew(SScrollBox);
-        MemoryScroll = List;
+        UClass* JournalClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/UI/Widgets/Panels/WBP_Journal.WBP_Journal_C"));
+        UUserWidget* Journal = JournalClass ? CreateWidget<UUserWidget>(World, JournalClass) : nullptr;
+        if (!Journal || !Journal->WidgetTree)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Missing widget blueprint: /Game/UI/Widgets/Panels/WBP_Journal"));
+            SyncRecipeSheetVisibility();
+            return;
+        }
+
         // Story entries are tied to this play session's cooking progress rather than saved
         // achievement unlocks, so the memories follow what the player has actually done.
-        struct FMemoryEntry { const TCHAR* Heading; const TCHAR* Text; bool bAvailable; };
-        const FMemoryEntry Memories[] = {
-            {TEXT("开篇"), TEXT("餐馆的最后一天，想再做一次仰望星空派。要是有人愿意一起动手，就更好了。"), true},
-            {TEXT("面团"), TEXT("第一次擀面时，我们把厨房弄得像下了一场雪。面皮不够圆，大家却笑了很久。"), bDoughComplete},
-            {TEXT("食材"), TEXT("有人喜欢切得细一些，有人总是偷偷尝一口。那时候，准备食材也像一场聚会。"), bFishCut && bOnionCut && bParsleyCut},
-            {TEXT("馅料"), TEXT("把不同的味道拌在一起，是大家最期待的一步。每个人都说自己知道最好的配方。"), bFillingReady},
-            {TEXT("鱼头"), TEXT("我们把鱼头朝向天空，开玩笑说，这样它们就能看见海上的星星。"), bHeadsComplete},
-            {TEXT("烘烤"), TEXT("炉火需要耐心。等香味慢慢传出来时，总有人已经搬好椅子，坐在桌边。"), bBakePerfect},
-            {TEXT("同行"), TEXT("今天，厨房里又有人和我一起做了仰望星空派。谢谢你陪我走过餐馆的最后一天。"), bEndingSeen},
+        // The wording lives in WBP_Journal; only the entries the player has not reached yet get
+        // covered with the placeholder text.
+        const bool Available[] = {
+            true,
+            bDoughComplete,
+            bFishCut && bOnionCut && bParsleyCut,
+            bFillingReady,
+            bHeadsComplete,
+            bBakePerfect,
+            bEndingSeen,
         };
-        List->AddSlot().Padding(8, 4)[SNew(STextBlock).Text(FText::FromString(TEXT("老厨师的回忆"))).Font(Font(21, true)).ColorAndOpacity(FLinearColor(1.0f, 0.87f, 0.62f))];
-        for (const FMemoryEntry& Entry : Memories)
+        for (int32 Index = 0; Index < UE_ARRAY_COUNT(Available); ++Index)
         {
-            List->AddSlot().Padding(7, 4)
-            [SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
-             .BorderBackgroundColor(FLinearColor(0.36f, 0.22f, 0.12f, 0.95f)).Padding(10)
-             [SNew(SVerticalBox)
-              + SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Text(FText::FromString(Entry.bAvailable ? Entry.Heading : TEXT("尚未解锁"))).Font(Font(17, true)).ColorAndOpacity(FLinearColor(1.0f, 0.87f, 0.65f))]
-              + SVerticalBox::Slot().AutoHeight().Padding(0,5,0,0)[SNew(STextBlock).Text(FText::FromString(Entry.bAvailable ? Entry.Text : TEXT("……"))).Font(Font(14)).AutoWrapText(true).ColorAndOpacity(FLinearColor(0.95f, 0.88f, 0.73f))]]];
+            if (Available[Index]) continue;
+            if (UTextBlock* Heading = Cast<UTextBlock>(Journal->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("Head%d"), Index)))))
+                Heading->SetText(FText::FromString(TEXT("尚未解锁")));
+            if (UTextBlock* Body = Cast<UTextBlock>(Journal->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("Body%d"), Index)))))
+                Body->SetText(FText::FromString(TEXT("……")));
         }
-        List->AddSlot().Padding(8, 12, 8, 4)[SNew(STextBlock).Text(FText::FromString(TEXT("成就勋章"))).Font(Font(21, true)).ColorAndOpacity(FLinearColor(1.0f, 0.87f, 0.62f))];
-        for (int32 Index = 0; Index < MedalCount; ++Index)
+
+        // Medal rows are filled in here, but the card itself is WBP_MedalRow.
+        UVerticalBox* MedalList = Cast<UVerticalBox>(Journal->WidgetTree->FindWidget(TEXT("MedalList")));
+        UClass* RowClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/UI/Widgets/Panels/WBP_MedalRow.WBP_MedalRow_C"));
+        if (MedalList && RowClass)
         {
-            const bool bUnlocked = IsUnlocked(FName(Medals[Index].Id));
-            TSharedRef<SWidget> Badge = SNew(SImage).Image(&MedalBrushes[Index]);
-            if (!bUnlocked)
+            for (int32 Index = 0; Index < MedalCount; ++Index)
             {
-                Badge = SNew(SOverlay)
-                    + SOverlay::Slot()[SNew(SImage).Image(&MedalBrushes[Index]).ColorAndOpacity(FLinearColor(0.13f, 0.11f, 0.09f, 1.0f))]
-                    + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
-                    [SNew(STextBlock).Text(FText::FromString(TEXT("?"))).Font(Font(35, true)).ColorAndOpacity(FLinearColor(1.0f, 0.88f, 0.65f))];
+                UUserWidget* Row = CreateWidget<UUserWidget>(World, RowClass);
+                if (!Row || !Row->WidgetTree) continue;
+                const bool bUnlocked = IsUnlocked(FName(Medals[Index].Id));
+                if (UImage* Badge = Cast<UImage>(Row->WidgetTree->FindWidget(TEXT("Medal"))))
+                {
+                    if (MedalTextures.IsValidIndex(Index) && MedalTextures[Index]) Badge->SetBrushFromTexture(MedalTextures[Index]);
+                    Badge->SetColorAndOpacity(bUnlocked ? FLinearColor::White : FLinearColor(0.13f, 0.11f, 0.09f, 1.0f));
+                }
+                if (UTextBlock* Lock = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("Lock"))))
+                    Lock->SetVisibility(bUnlocked ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+                if (UTextBlock* MedalName = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("Name"))))
+                    MedalName->SetText(FText::FromString(Medals[Index].Name));
+                if (UTextBlock* MedalDesc = Cast<UTextBlock>(Row->WidgetTree->FindWidget(TEXT("Desc"))))
+                    MedalDesc->SetText(FText::FromString(bUnlocked ? Medals[Index].Description : TEXT("???")));
+                if (UVerticalBoxSlot* RowSlot = MedalList->AddChildToVerticalBox(Row))
+                    RowSlot->SetPadding(FMargin(0.0f, 3.0f));
             }
-            List->AddSlot().Padding(7)
-            [SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
-             .BorderBackgroundColor(FLinearColor(0.36f, 0.22f, 0.12f, 0.95f)).Padding(7)
-             [SNew(SHorizontalBox)
-              + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-              [Badge]
-              + SHorizontalBox::Slot().FillWidth(1).Padding(12, 0).VAlign(VAlign_Center)
-              [SNew(SVerticalBox)
-               + SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Text(FText::FromString(Medals[Index].Name)).Font(Font(18, true)).ColorAndOpacity(FLinearColor(1.0f, 0.87f, 0.65f))]
-               + SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Text(FText::FromString(bUnlocked ? Medals[Index].Description : TEXT("???"))).Font(Font(13)).ColorAndOpacity(FLinearColor(0.95f, 0.88f, 0.73f))]]]];
         }
-        Content->AddSlot().FillHeight(1).Padding(8)
-        [SNew(SBorder).BorderImage(TextPanelTexture ? &TextPanelBrush : FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
-         .BorderBackgroundColor(FLinearColor::White).Padding(FMargin(45,40))
-         [SNew(SVerticalBox)
-          + SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
-          [SNew(STextBlock).Text(FText::FromString(TEXT("厨房手记  ·  成就勋章"))).Font(Font(24, true)).ColorAndOpacity(FLinearColor(1.0f, 0.87f, 0.62f))]
-          + SVerticalBox::Slot().FillHeight(1)[List]]];
+
+        Journal->AddToViewport(700);
+        JournalWidget = Journal;
+        MemoryScroll = Cast<UScrollBox>(Journal->WidgetTree->FindWidget(TEXT("Scroll")));
     }
-    // Left side on purpose: the medal popup and the chef intro both own the top-right corner, and
-    // the journal used to hide underneath them. The panel starts below the switch strip so the two
-    // never overlap.
-    JournalWidget = SNew(SOverlay)
-        + SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Top).Padding(FMargin(0, 9, 0, 0))
-        [TabRow]
-        + SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Top).Padding(FMargin(35, 54, 0, 40))
-        [SNew(SBox).WidthOverride(430)[Content]];
-    World->GetGameViewport()->AddViewportWidgetContent(JournalWidget.ToSharedRef(), 700);
+
     SyncRecipeSheetVisibility();
 }
 
@@ -739,9 +758,11 @@ void UFoodAchievementSubsystem::SyncRecipeSheetVisibility()
 void UFoodAchievementSubsystem::RemoveJournal()
 {
     MemoryScroll.Reset();
-    if (JournalWidget.IsValid() && GetWorld() && GetWorld()->GetGameViewport())
-        GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(JournalWidget.ToSharedRef());
+    if (JournalWidget.IsValid()) JournalWidget->RemoveFromParent();
     JournalWidget.Reset();
+    if (JournalTabStrip.IsValid() && GetWorld() && GetWorld()->GetGameViewport())
+        GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(JournalTabStrip.ToSharedRef());
+    JournalTabStrip.Reset();
     if (!bJournalOpen) SyncRecipeSheetVisibility();
 }
 
@@ -753,34 +774,43 @@ void UFoodAchievementSubsystem::ShowNextPopup()
     const bool bCore = FCString::Strcmp(Medals[Index].Id, TEXT("chef_approval")) == 0 || FCString::Strcmp(Medals[Index].Id, TEXT("shared_pie")) == 0;
     const TCHAR* SoundPath = bCore ? TEXT("/Game/FoodAudio/SFX_CoreMotifPlan.SFX_CoreMotifPlan") : TEXT("/Game/FoodAudio/SFX_AchievementPlan.SFX_AchievementPlan");
     if (USoundBase* Sound = LoadObject<USoundBase>(nullptr, SoundPath)) UGameplayStatics::PlaySound2D(GetWorld(), Sound, bCore ? 0.30f : 0.35f);
-    SAssignNew(PopupBorder, SBorder)
-        .BorderImage(TextPanelTexture ? &TextPanelBrush : FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
-        .BorderBackgroundColor(FLinearColor::White).Padding(22)
-        [SNew(SHorizontalBox)
-         + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-         [SNew(SBox).WidthOverride(96).HeightOverride(96)
-          [SNew(SOverlay)
-          + SOverlay::Slot()[SAssignNew(PopupMedal, SImage).Image(&MedalBrushes[Index]).RenderTransformPivot(FVector2D(0.5f, 0.5f))]
-          + SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Top)
-          [SAssignNew(PopupSparkle, STextBlock).Text(FText::FromString(TEXT("✦"))).Font(Font(27, true)).ColorAndOpacity(FLinearColor(1.0f, 0.92f, 0.55f))]]]
-         + SHorizontalBox::Slot().FillWidth(1).Padding(12, 0).VAlign(VAlign_Center)
-         [SNew(SVerticalBox)
-          + SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Text(FText::FromString(TEXT("成就达成！"))).Font(Font(16, true)).ColorAndOpacity(FLinearColor(0.32f, 0.13f, 0.04f))]
-          + SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Text(FText::FromString(Medals[Index].Name)).Font(Font(24, true)).ColorAndOpacity(FLinearColor(0.16f, 0.07f, 0.03f))]
-          + SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Text(FText::FromString(Medals[Index].Description)).Font(Font(13)).ColorAndOpacity(FLinearColor(0.20f, 0.09f, 0.04f))]]];
-    PopupBorder->SetRenderOpacity(0.0f);
-    PopupWidget = SNew(SOverlay).Visibility(EVisibility::HitTestInvisible)
-        + SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Top).Padding(FMargin(0, 55, 35, 0))
-        [SNew(SBox).WidthOverride(430)[PopupBorder.ToSharedRef()]];
-    GetWorld()->GetGameViewport()->AddViewportWidgetContent(PopupWidget.ToSharedRef(), 10000);
+
+    // 外观布局在 WBP_AchievementPopup 里，代码只填勋章和三条文字
+    UClass* PopupClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/UI/Widgets/HUD/WBP_AchievementPopup.WBP_AchievementPopup_C"));
+    UUserWidget* Popup = PopupClass ? CreateWidget<UUserWidget>(GetWorld(), PopupClass) : nullptr;
+    if (!Popup || !Popup->WidgetTree)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Missing widget blueprint: /Game/UI/Widgets/HUD/WBP_AchievementPopup"));
+        return;
+    }
+    UBorder* Border = Cast<UBorder>(Popup->WidgetTree->FindWidget(TEXT("Bg")));
+    UImage* Medal = Cast<UImage>(Popup->WidgetTree->FindWidget(TEXT("Medal")));
+    UTextBlock* Sparkle = Cast<UTextBlock>(Popup->WidgetTree->FindWidget(TEXT("Sparkle")));
+    if (UTextBlock* Caption = Cast<UTextBlock>(Popup->WidgetTree->FindWidget(TEXT("Caption"))))
+        Caption->SetText(FText::FromString(TEXT("成就达成！")));
+    if (UTextBlock* Title = Cast<UTextBlock>(Popup->WidgetTree->FindWidget(TEXT("Name"))))
+        Title->SetText(FText::FromString(Medals[Index].Name));
+    if (UTextBlock* Desc = Cast<UTextBlock>(Popup->WidgetTree->FindWidget(TEXT("Desc"))))
+        Desc->SetText(FText::FromString(Medals[Index].Description));
+    if (Medal)
+    {
+        Medal->SetBrush(MedalBrushes[Index]);
+        Medal->SetRenderTransformPivot(FVector2D(0.5f, 0.5f));
+    }
+    if (Border) Border->SetRenderOpacity(0.0f);
+
+    PopupWidget = Popup;
+    PopupBorder = Border;
+    PopupMedal = Medal;
+    PopupSparkle = Sparkle;
+    Popup->AddToViewport(10000);
     PopupStartTime = FPlatformTime::Seconds();
     UE_LOG(LogTemp, Display, TEXT("Food achievement popup mounted in gameplay viewport: %s"), Medals[Index].Name);
 }
 
 void UFoodAchievementSubsystem::RemovePopup()
 {
-    if (PopupWidget.IsValid() && GetWorld() && GetWorld()->GetGameViewport())
-        GetWorld()->GetGameViewport()->RemoveViewportWidgetContent(PopupWidget.ToSharedRef());
+    if (PopupWidget.IsValid()) PopupWidget->RemoveFromParent();
     PopupWidget.Reset();
     PopupBorder.Reset();
     PopupMedal.Reset();

@@ -10,7 +10,11 @@ class SBorder;
 class SImage;
 class STextBlock;
 class SWidget;
-class SScrollBox;
+class UScrollBox;
+class UBorder;
+class UImage;
+class UTextBlock;
+class UUserWidget;
 class UFoodAchievementSaveGame;
 class UTexture2D;
 
@@ -94,13 +98,16 @@ private:
     TArray<TWeakObjectPtr<UObject>> StyledTextPanels;
     TArray<FSlateBrush> MedalBrushes;
     TArray<int32> PopupQueue;
-    TSharedPtr<SWidget> PopupWidget;
-    TSharedPtr<SBorder> PopupBorder;
-    TSharedPtr<SImage> PopupMedal;
-    TSharedPtr<STextBlock> PopupSparkle;
-    TSharedPtr<SWidget> JournalWidget;
-    TSharedPtr<SScrollBox> MemoryScroll;
-    TSharedPtr<SWidget> MemoryToast;
+    // 成就弹窗与手记提示都由控件蓝图驱动（内容/背景/位置都在蓝图里改）
+    TWeakObjectPtr<UUserWidget> PopupWidget;
+    TWeakObjectPtr<UBorder> PopupBorder;
+    TWeakObjectPtr<UImage> PopupMedal;
+    TWeakObjectPtr<UTextBlock> PopupSparkle;
+    // 手记面板由 WBP_Journal 驱动；顶部的“食谱 / 厨房手记”切换条还留在 Slate，因为它带点击回调
+    TWeakObjectPtr<UUserWidget> JournalWidget;
+    TWeakObjectPtr<UScrollBox> MemoryScroll;
+    TSharedPtr<SWidget> JournalTabStrip;
+    TWeakObjectPtr<UUserWidget> MemoryToast;
     TArray<int32> MemoryToastQueue;
     bool bMemoryNotified[6] = {};
     double MemoryToastStart = 0.0;

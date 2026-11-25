@@ -446,47 +446,12 @@ void Tick(UWorld* W)
         else if (PageArg.Equals(TEXT("Confirm"), ESearchCase::IgnoreCase)) Show(W, EPage::ConfirmRestart);
         else if (PageArg.Equals(TEXT("Ending"), ESearchCase::IgnoreCase)) Show(W, EPage::Ending);
     }
-    // TEMP-VERIFY 手记最后一页渲染，验证后删除
-    static bool bChefEndingForced = false;
-    if (!bChefEndingForced && FParse::Param(FCommandLine::Get(), TEXT("FoodChefEnding")))
+    if (!bShotTaken && Page != EPage::None && FParse::Param(FCommandLine::Get(), TEXT("FoodShot")))
     {
-        bChefEndingForced = true;
-        if (UClass* ChefClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/UI/Widgets/Panels/WBP_ChefEnding.WBP_ChefEnding_C")))
-            if (UUserWidget* ChefWidget = CreateWidget<UUserWidget>(W, ChefClass)) ChefWidget->AddToViewport(20000);
-    }
-    if (!bShotTaken && (Page != EPage::None || bChefEndingForced) && FParse::Param(FCommandLine::Get(), TEXT("FoodShot")))
-    {
-        if (ShotDeadline == 0.0) ShotDeadline = FPlatformTime::Seconds() + 14.0;
+        if (ShotDeadline == 0.0) ShotDeadline = FPlatformTime::Seconds() + 1.5;
         else if (FPlatformTime::Seconds() >= ShotDeadline)
         {
             bShotTaken = true;
-            if (bChefEndingForced && W && W->GetGameViewport())
-            {
-                // TEMP-VERIFY 量一下实际几何，验证后删除
-                const FVector2D VS = FVector2D(W->GetGameViewport()->Viewport->GetSizeXY());
-                if (UClass* KC = LoadClass<UUserWidget>(nullptr, TEXT("/Game/UI/Widgets/Panels/WBP_ChefEnding.WBP_ChefEnding_C")))
-                {
-                    TArray<UUserWidget*> Ws;
-                    UWidgetBlueprintLibrary::GetAllWidgetsOfClass(W, Ws, KC, false);
-                    for (UUserWidget* Wd : Ws)
-                    {
-                        if (!Wd || !Wd->IsInViewport()) continue;
-                        const FGeometry G = Wd->GetCachedGeometry();
-                        UE_LOG(LogTemp, Warning, TEXT("[FoodMenu] ChefEnding widget pos=(%.1f,%.1f) size=(%.1f,%.1f) viewport=(%.1f,%.1f)"),
-                               G.GetAbsolutePosition().X, G.GetAbsolutePosition().Y, G.GetAbsoluteSize().X, G.GetAbsoluteSize().Y, VS.X, VS.Y);
-                        if (Wd->WidgetTree)
-                        {
-                            Wd->WidgetTree->ForEachWidget([&G](UWidget* C)
-                            {
-                                if (!C) return;
-                                const FGeometry CG = C->GetTickSpaceGeometry();
-                                UE_LOG(LogTemp, Warning, TEXT("[FoodMenu]   child %s abs=(%.1f,%.1f) size=(%.1f,%.1f)"),
-                                       *C->GetName(), CG.GetAbsolutePosition().X, CG.GetAbsolutePosition().Y, CG.GetAbsoluteSize().X, CG.GetAbsoluteSize().Y);
-                            });
-                        }
-                    }
-                }
-            }
             FScreenshotRequest::RequestScreenshot(FString(), true, true);
             UE_LOG(LogTemp, Warning, TEXT("[FoodMenu] 已请求截图，当前页 %d"), (int32)Page);
         }
